@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>라디오 플레이어</title>
+<style>
+:root{--bg:#f4f1ec;--card:#fff;--text:#222;--sub:#777;--accent:#c0392b;--line:#e3ddd3}
+@media (prefers-color-scheme:dark){:root{--bg:#16161a;--card:#202026;--text:#eee;--sub:#999;--accent:#ff6b5b;--line:#32323a}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:"Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;display:flex;justify-content:center;padding:24px 16px}
+.wrap{width:100%;max-width:640px}
+h1{font-size:20px;margin:0 0 16px}
+.list{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px}
+@media (max-width:480px){.list{grid-template-columns:repeat(2,1fr)}}
+.st{display:flex;align-items:center;gap:10px;padding:14px 12px;background:var(--card);border:2px solid var(--line);border-radius:14px;cursor:pointer;text-align:left;color:inherit;font:inherit;width:100%}
+.st.active{border-color:var(--accent)}
+.st b{display:block;font-size:16px}.st small{color:var(--sub)}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--line);flex:none}
+.st.active .dot{background:var(--accent)}
+.st.active.playing .dot{animation:p 1s infinite}
+@keyframes p{50%{opacity:.3}}
+.player{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+#now{font-size:18px;font-weight:700}
+#status{color:var(--sub);font-size:13px;margin:4px 0 16px;min-height:18px}
+.ctl{display:flex;gap:10px;margin-bottom:16px}
+.btn{flex:1;padding:12px;border:0;border-radius:10px;font:inherit;font-weight:700;cursor:pointer;font-size:15px}
+#play{background:var(--accent);color:#fff}
+#stop{background:var(--line);color:var(--text)}
+.vol{display:flex;align-items:center;gap:10px}
+.vol input{flex:1;accent-color:var(--accent)}
+#vv{width:36px;text-align:right;font-size:13px;color:var(--sub)}
+#mute{background:none;border:0;font-size:20px;cursor:pointer;color:inherit}
+a.site{display:inline-block;margin-top:14px;font-size:12px;color:var(--sub)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📻 라디오</h1>
+  <div class="list" id="list"></div>
+  <div class="player">
+    <div id="now">방송을 선택하세요</div>
+    <div id="status"></div>
+    <div class="ctl">
+      <button class="btn" id="play">▶ 재생</button>
+      <button class="btn" id="stop">■ 정지</button>
+    </div>
+    <div class="vol">
+      <button id="mute" title="음소거">🔊</button>
+      <input type="range" id="vol" min="0" max="100" value="70">
+      <span id="vv">70%</span>
+    </div>
+    <a class="site" id="site" target="_blank" rel="noopener" hidden>공식 사이트에서 듣기 ↗</a>
+  </div>
+  <audio id="audio" preload="none"></audio>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.17/hls.min.js"></script>
+<script>
+const STATIONS=[
+ {name:"KBS 클래식 FM",freq:"93.1 MHz",site:"https://kong.kbs.co.kr/",kbs:24,urls:[]},
+ {name:"CBS 음악 FM",freq:"93.9 MHz",site:"https://www.cbs.co.kr/radio/pc/player.asp",urls:["https://m-aac.cbs.co.kr/mweb_cbs939/_definst_/cbs939.stream/playlist.m3u8"]},
+ {name:"CBS 표준 FM",freq:"98.1 MHz",site:"https://www.cbs.co.kr/radio/pc/player.asp",urls:["https://m-aac.cbs.co.kr/mweb_cbs981/_definst_/cbs981.stream/playlist.m3u8"]},
+ {name:"ABC Classic",freq:"호주 · 시드니",site:"https://www.abc.net.au/listen/live/classic",urls:["https://streaming.abc-cdn.net.au/audio/hls/classicnsw.m3u8?source=web"]},
+ {name:"Classic FM",freq:"영국",site:"https://www.classicfm.com/radio/",urls:["https://media-ice.musicradio.com/ClassicFMMP3"]},
+ {name:"France Musique",freq:"프랑스",site:"https://www.radiofrance.fr/francemusique",urls:["https://icecast.radiofrance.fr/francemusique-midfi.mp3","https://icecast.radiofrance.fr/francemusique-hifi.aac"]}
+];
+const $=id=>document.getElementById(id), audio=$("audio");
+let cur=null, hls=null;
+
+STATIONS.forEach((s,i)=>{
+  const b=document.createElement("button");b.className="st";b.id="st"+i;
+  b.innerHTML=`<span class="dot"></span><span><b>${s.name}</b><small>${s.freq}</small></span>`;
+  b.onclick=()=>select(i,true);$("list").appendChild(b);
+});
+
+function setStatus(t){$("status").textContent=t}
+function mark(){STATIONS.forEach((_,i)=>{const e=$("st"+i);e.classList.toggle("active",i===cur);e.classList.toggle("playing",i===cur&&!audio.paused)})}
+
+function select(i,autoplay){
+  stop();cur=i;const s=STATIONS[i];
+  $("now").textContent=s.name;$("site").href=s.site;$("site").hidden=false;
+  setStatus("준비됨");mark();
+  if(autoplay)play();
+}
+
+async function resolve(s){
+  let urls=[...s.urls];
+  if(s.kbs){
+    try{
+      const r=await fetch(`https://cfpwwwapi.kbs.co.kr/api/v1/landing/live/channel_code/${s.kbs}`);
+      const j=await r.json();
+      const u=j.channel_item?.[0]?.service_url;
+      if(u)urls.unshift(u);
+    }catch(e){}
+  }
+  return urls;
+}
+
+function load(url){
+  return new Promise((ok,fail)=>{
+    if(hls){hls.destroy();hls=null}
+    if(!/\.m3u8/.test(url)){
+      audio.src=url;audio.play().then(ok,fail);return;
+    }
+    if(window.Hls&&Hls.isSupported()){
+      hls=new Hls({lowLatencyMode:false});
+      hls.on(Hls.Events.ERROR,(_,d)=>{if(d.fatal)fail(d)});
+      hls.loadSource(url);hls.attachMedia(audio);
+      hls.on(Hls.Events.MANIFEST_PARSED,()=>audio.play().then(ok,fail));
+    }else if(audio.canPlayType("application/vnd.apple.mpegurl")){
+      audio.src=url;audio.play().then(ok,fail);
+    }else fail(new Error("HLS 미지원"));
+  });
+}
+
+async function play(){
+  if(cur===null){select(0,false)}
+  const s=STATIONS[cur];setStatus("연결 중...");
+  const urls=await resolve(s);
+  for(const u of urls){
+    try{await load(u);setStatus("● 재생 중");mark();return}catch(e){}
+  }
+  setStatus("재생 실패 — 아래 공식 사이트 링크를 이용하세요");mark();
+}
+
+function stop(){
+  audio.pause();
+  if(hls){hls.destroy();hls=null}
+  audio.removeAttribute("src");audio.load();
+  if(cur!==null)setStatus("정지됨");mark();
+}
+
+$("play").onclick=play;$("stop").onclick=stop;
+audio.onpause=mark;audio.onplaying=mark;
+
+const vol=$("vol");
+function applyVol(){audio.volume=vol.value/100;$("vv").textContent=vol.value+"%";$("mute").textContent=audio.muted||vol.value==0?"🔇":"🔊"}
+vol.oninput=()=>{audio.muted=false;applyVol()};
+$("mute").onclick=()=>{audio.muted=!audio.muted;applyVol()};
+applyVol();
+</script>
+</body>
+</html>
